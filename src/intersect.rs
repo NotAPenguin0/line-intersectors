@@ -1,6 +1,7 @@
 use crate::geometry;
 use std::ops;
 use std::collections::HashSet;
+use crate::geometry::Line;
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct Intersection {
@@ -9,20 +10,18 @@ pub struct Intersection {
     pub point: geometry::Point,
 }
 
-pub trait Intersector {
-    fn new(lines: &[geometry::Line]) -> Self;
-    fn num_tests(&mut self) -> usize;
-    fn next_intersection(&mut self) -> Option<Intersection>;
+#[derive(Default)]
+pub struct Report {
+    pub intersections: Vec<Intersection>,
+    pub num_tests: usize
 }
 
-pub fn report_all_intersections<I>(lines: &[geometry::Line]) -> Vec<Intersection> where I: Intersector {
-    let mut intersections = Vec::new();
-    let mut intersector = I::new(&lines);
-    while let Some(intersection) = intersector.next_intersection() {
-        intersections.push(intersection);
-    }
-    println!("#intersection tests: {:?}", intersector.num_tests());
-    intersections
+pub trait Intersector {
+    fn report_intersections(lines: &[geometry::Line]) -> Report;
+}
+
+pub fn report_all_intersections<I>(lines: &[geometry::Line]) -> Report where I: Intersector {
+    I::report_intersections(&lines)
 }
 
 impl ops::Add<geometry::Point> for geometry::Point {
@@ -119,57 +118,23 @@ fn line_intersect(l1: geometry::Line, l2: geometry::Line) -> Option<Intersection
     None
 }
 
-#[derive(Default)]
-pub struct BruteForceIntersector {
-    lines: Vec<geometry::Line>,
-    // Indices for iteration over the list of lines.
-    i: usize,
-    j: usize,
-    pub num_tests: usize
-}
+pub struct BruteForceIntersector;
+pub struct SweepLineIntersector;
+pub struct SmartSweepLineIntersector;
 
 impl Intersector for BruteForceIntersector {
-    fn new(lines: &[geometry::Line]) -> BruteForceIntersector {
-        BruteForceIntersector {
-            lines: Vec::from(lines),
-            i: 0,
-            j: 1,
-            num_tests: 0
-        }
-    }
-
-    fn num_tests(&mut self) -> usize {
-        self.num_tests
-    }
-
-    fn next_intersection(&mut self) -> Option<Intersection> {
-        while self.i < self.lines.len() - 1 {
-            while self.j < self.lines.len() {
-                let line = self.lines[self.i];
-                let other = self.lines[self.j];
-                self.j += 1;
-                self.num_tests += 1;
-                if let Some(intersection) = line_intersect(line, other) {
-                    return Some(intersection);
+    fn report_intersections(lines: &[Line]) -> Report {
+        let mut intersections = Vec::<Intersection>::new();
+        let mut num_tests = 0;
+        for i in 0..lines.len()-1 {
+            for j in i+1..lines.len() {
+                if let Some(intersection) = line_intersect(lines[i], lines[j]) {
+                    intersections.push(intersection);
                 }
             }
-            self.i += 1;
-            self.j = self.i + 1;
         }
-        None
+        Report { intersections, num_tests }
     }
-}
-
-#[derive(Default)]
-pub struct SweepLineIntersector {
-    lines: Vec<geometry::Line>,
-    points: Vec<SweepLinePoint>,
-    current_sweep_point: usize,
-    active_set: Vec<geometry::Line>,
-    to_report: Vec<Intersection>,
-
-    // Performance analytics
-    pub num_tests: usize
 }
 
 #[derive(Default, Copy, Clone)]
@@ -180,52 +145,44 @@ struct SweepLinePoint {
 }
 
 impl Intersector for SweepLineIntersector {
-    fn new(lines: &[geometry::Line]) -> SweepLineIntersector {
-        let mut intersector = SweepLineIntersector {
-            lines: Vec::from(lines),
-            points: lines.iter().flat_map(|line| [
-                    // The largest y coordinate is considered the start of a line.
-                    SweepLinePoint { line: *line, point: line.a, start: line.a.y > line.b.y },
-                    SweepLinePoint { line: *line, point: line.b, start: line.b.y > line.a.y }])
-                .collect::<Vec<_>>(),
-            current_sweep_point: 0,
-            active_set: Vec::new(),
-            ..Default::default()
-        };
-        intersector.points.sort_by(|p, q| p.point.y.partial_cmp(&q.point.y).unwrap().reverse());
-        intersector
-    }
+    fn report_intersections(lines: &[Line]) -> Report {
+        let mut intersections = Vec::new();
+        let mut num_tests = 0;
 
-    fn num_tests(&mut self) -> usize {
-        self.num_tests
-    }
+        let mut points = lines.iter().flat_map(|line| [
+            // The largest y coordinate is considered the start of a line.
+            SweepLinePoint { line: *line, point: line.a, start: line.a.y > line.b.y },
+            SweepLinePoint { line: *line, point: line.b, start: line.b.y > line.a.y }])
+        .collect::<Vec<_>>();
+        points.sort_by(|p, q| p.point.y.partial_cmp(&q.point.y).unwrap().reverse());
+        let mut active_set = Vec::new();
 
-    fn next_intersection(&mut self) -> Option<Intersection> {
-        while self.current_sweep_point < self.points.len() {
-            let p = self.points[self.current_sweep_point];
-
-            // Start event: add to active set and test against all current elements in the active set.
-            if p.start {
-                for other in &self.active_set {
-                    self.num_tests += 1;
-                    if let Some(intersect) = line_intersect(p.line, *other) {
-                        self.to_report.push(intersect);
+        for current_sweep_point in 0..points.len() {
+            let point = points[current_sweep_point];
+            if point.start {
+                for other in &active_set {
+                    num_tests += 1;
+                    if let Some(intersect) = line_intersect(point.line, *other) {
+                        intersections.push(intersect);
                     }
                 }
-                self.active_set.push(p.line);
+                active_set.push(point.line);
             } else {
-                // End event: remove from active set
-                self.active_set.retain(|x| *x != p.line);
+                active_set.retain(|x| *x != point.line);
             }
-
-            self.current_sweep_point += 1;
         }
 
-        // If we still have intersections to report, report them and remove from the list
-        if !self.to_report.is_empty() {
-            return Some(self.to_report.swap_remove(0));
-        }
+        Report { intersections, num_tests }
+    }
+}
 
-        None
+impl Intersector for SmartSweepLineIntersector {
+    fn report_intersections(lines: &[Line]) -> Report {
+        let mut intersections = Vec::new();
+        let mut num_tests = 0;
+
+
+
+        Report { intersections, num_tests }
     }
 }
