@@ -6,9 +6,9 @@ use std::time;
 use tiny_skia::*;
 
 fn main() {
-    let mut g = generators::Generator::<generators::ShortLines>::new();
-    let n = 1000;
-    let lines: Vec<_> = (0..n).map(|_| g.next()).collect();
+    let mut rng = rand::thread_rng();
+    let n = 50;
+    let lines = generators::generate_lines::<generators::ShortLines>(n, &mut rng);
     let now = time::Instant::now();
     let intersections = intersect::report_all_intersections::<intersect::SweepLineIntersector>(&lines);
     let elapsed = now.elapsed();

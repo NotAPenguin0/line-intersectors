@@ -165,7 +165,7 @@ pub struct SweepLineIntersector {
     lines: Vec<geometry::Line>,
     points: Vec<SweepLinePoint>,
     current_sweep_point: usize,
-    active_set: HashSet<geometry::Line>,
+    active_set: Vec<geometry::Line>,
     to_report: Vec<Intersection>,
 
     // Performance analytics
@@ -189,7 +189,7 @@ impl Intersector for SweepLineIntersector {
                     SweepLinePoint { line: *line, point: line.b, start: line.b.y > line.a.y }])
                 .collect::<Vec<_>>(),
             current_sweep_point: 0,
-            active_set: HashSet::new(),
+            active_set: Vec::new(),
             ..Default::default()
         };
         intersector.points.sort_by(|p, q| p.point.y.partial_cmp(&q.point.y).unwrap().reverse());
@@ -212,10 +212,10 @@ impl Intersector for SweepLineIntersector {
                         self.to_report.push(intersect);
                     }
                 }
-                self.active_set.insert(p.line);
+                self.active_set.push(p.line);
             } else {
                 // End event: remove from active set
-                self.active_set.remove(&p.line);
+                self.active_set.retain(|x| *x != p.line);
             }
 
             self.current_sweep_point += 1;

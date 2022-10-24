@@ -2,28 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::geometry;
 use rand::Rng;
 
-pub struct Generator<F> {
-    gen: F,
-    cur: i32,
-}
-
 pub trait LineGenerator {
-    fn line(&mut self, i: i32) -> geometry::Line;
-}
-
-impl<F> Generator<F> where F: LineGenerator + Default {
-    pub fn new() -> Generator<F> {
-        Generator {
-            gen: F::default(),
-            cur: 0
-        }
-    }
-
-    pub fn next(&mut self) -> geometry::Line {
-        let i = self.cur;
-        self.cur += 1;
-        self.gen.line(i)
-    }
+    fn line(rng: &mut impl Rng) -> geometry::Line;
 }
 
 fn random_unit_point(rng: &mut impl Rng) -> geometry::Point {
@@ -47,34 +27,29 @@ fn random_point_in_circle(center: geometry::Point, radius: f32, rng: &mut impl R
     }
 }
 
-static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
-fn line_id() -> usize {
-    ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-}
+pub struct RandomUnitSquare;
+pub struct ShortLines;
 
-#[derive(Default)]
-pub struct RandomUnitSquare {
-    rng: rand::rngs::ThreadRng,
+pub fn generate_lines<G>(n: usize, rng: &mut impl Rng) -> Vec<geometry::Line> where G : LineGenerator {
+    (0..n).into_iter().map(|_|
+        G::line(rng)
+    )
+    .collect()
 }
 
 impl LineGenerator for RandomUnitSquare {
-    fn line(&mut self, _: i32) -> geometry::Line {
+    fn line(rng: &mut impl Rng) -> geometry::Line {
         geometry::Line {
-            id: line_id(), a: random_unit_point(&mut self.rng), b: random_unit_point(&mut self.rng)
+            a: random_unit_point(rng), b: random_unit_point(rng)
         }
     }
 }
 
-#[derive(Default)]
-pub struct ShortLines {
-    rng: rand::rngs::ThreadRng,
-}
-
 impl LineGenerator for ShortLines {
-    fn line(&mut self, _: i32) -> geometry::Line {
-        let start = random_unit_point(&mut self.rng);
-        let length = self.rng.gen_range(0f32..0.25);
-        let end = random_point_in_circle(start, length, &mut self.rng);
-        geometry::Line { id: line_id(), a: start, b: end }
+    fn line(rng: &mut impl Rng) -> geometry::Line {
+        let start = random_unit_point(rng);
+        let length = rng.gen_range(0f32..0.25);
+        let end = random_point_in_circle(start, length, rng);
+        geometry::Line { a: start, b: end }
     }
 }
