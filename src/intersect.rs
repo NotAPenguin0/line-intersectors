@@ -145,7 +145,7 @@ enum EventType {
     #[default]
     Start,
     End,
-    Intersection
+    Intersection(geometry::Line) // Intersection with another line
 }
 
 #[derive(Default, Debug, Copy, Clone)]
@@ -274,10 +274,9 @@ fn test_neighbour(l1: geometry::Line, l2: geometry::Line, queue: &mut BTreeSet::
     let i = line_intersect(l1, l2);
     if let Some(intersection) = i {
         queue.insert(SweepLinePoint{
-            line: Default::default(),
+            line: l1,
             point: intersection.point,
-            // Todo: add relevant lines to Intersection emote
-            event: EventType::Intersection
+            event: EventType::Intersection(l2)
         });
         println!("Intersection at {:?}", intersection.point);
         return i;
@@ -286,11 +285,17 @@ fn test_neighbour(l1: geometry::Line, l2: geometry::Line, queue: &mut BTreeSet::
     None
 }
 
+fn other_point(p: geometry::Point, p1: geometry::Point, p2: geometry::Point) -> geometry::Point {
+    if p == p1 { return p2; }
+    return p1;
+}
+
 impl Intersector for SmartSweepLineIntersector {
     fn report_intersections(lines: &[Line]) -> Report {
         let mut intersections = Vec::new();
         let mut num_tests = 0;
 
+        // Initialize data structures used in the algorithm
         let mut event_queue = BTreeSet::<SweepLinePoint>::new();
         let mut status = BTreeSet::<SweepLineStatus>::new();
 
@@ -312,8 +317,13 @@ impl Intersector for SmartSweepLineIntersector {
             });
         }
 
+        // Process events in order
         while let Some(event) = event_queue.pop_first() {
             match event.event {
+                // Start of a line segment:
+                // 1) Add segment to the active tree.
+                // 2) Test it with its neighbors and report potential intersections.
+                // 3) Add intersection point to the event queue.
                 EventType::Start => {
                     status.insert( SweepLineStatus {
                         line: event.line,
@@ -333,9 +343,83 @@ impl Intersector for SmartSweepLineIntersector {
                             intersections.push(intersection);
                         }
                     }
+
                 },
-                EventType::End => {},
-                EventType::Intersection => {},
+                // End of a line segment:
+                // 1) Remove segment from the active tree.
+                // 2) Test any new neighbors against each other.
+                EventType::End => {
+                    let (left, right) = get_neighbors(event.point, &status);
+                    status.retain(|s| s.line != event.line);
+                    if let Some(left) = left {
+                        if let Some(right) = right {
+                            num_tests += 1;
+                            if let Some(intersection) = line_intersect(left.line, right.line) {
+                                intersections.push(intersection);
+                                if intersection.point.y <= event.point.y {
+                                    event_queue.insert(SweepLinePoint {
+                                        line: left.line,
+                                        point: intersection.point,
+                                        event: EventType::Intersection(right.line)
+                                    });
+                                }
+                            }
+                        }
+                    }
+                },
+                // Intersection point:
+                // 1) Swap order of segments
+                // 2) Test new neighbors
+                EventType::Intersection(other) => {
+                    let (left, right) = (
+                        SweepLineStatus {
+                            line: event.line,
+                            point: match event.line.a.y <= event.line.b.y { true => event.line.a, false => event.line.b },
+                            kind: PointKind::End
+                        },
+                        SweepLineStatus {
+                            line: other,
+                            point: match other.a.y <= other.b.y { true => other.a, false => other.b },
+                            kind: PointKind::End
+                        }
+                    );
+
+                    // Remove old segments from status, add them back in reverse order (by swapping the points to the end point instead of the start point).
+                    status.retain(|s| s.line != left.line && s.line != right.line);
+                    status.insert(left);
+                    status.insert(right);
+
+                    let (left_neigh, _) = get_neighbors(left.point, &status);
+                    let (_, right_neigh) = get_neighbors(right.point, &status);
+
+                    if let Some(left_neigh) = left_neigh {
+                        num_tests += 1;
+                        if let Some(intersection) = line_intersect(left_neigh.line, left.line) {
+                            if intersection.point.y <= event.point.y {
+                                intersections.push(intersection);
+                                event_queue.insert(SweepLinePoint {
+                                    line: left_neigh.line,
+                                    point: intersection.point,
+                                    event: EventType::Intersection(left.line)
+                                });
+                            }
+                        }
+                    }
+
+                    if let Some(right_neigh) = right_neigh {
+                        num_tests += 1;
+                        if let Some(intersection) = line_intersect(right.line, right_neigh.line) {
+                            if intersection.point.y <= event.point.y {
+                                intersections.push(intersection);
+                                event_queue.insert(SweepLinePoint {
+                                    line: right.line,
+                                    point: intersection.point,
+                                    event: EventType::Intersection(right_neigh.line)
+                                });
+                            }
+                        }
+                    }
+                },
             };
         }
 

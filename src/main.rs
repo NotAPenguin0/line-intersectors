@@ -7,7 +7,7 @@ use tiny_skia::*;
 
 fn main() {
     let mut rng = rand::thread_rng();
-    let n = 50;
+    let n = 10;
     let lines = generators::generate_lines::<generators::RandomUnitSquare>(n, &mut rng);
     let now = time::Instant::now();
     let report = intersect::report_all_intersections::<intersect::SmartSweepLineIntersector>(&lines);
