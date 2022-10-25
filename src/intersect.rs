@@ -1,6 +1,9 @@
+#![feature(map_first_last)]
+use std::cmp::Ordering;
 use crate::geometry;
 use std::ops;
-use std::collections::HashSet;
+use std::collections::{Bound, BTreeSet};
+use std::ops::{RangeBounds, RangeTo, RangeFrom};
 use crate::geometry::Line;
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -137,11 +140,40 @@ impl Intersector for BruteForceIntersector {
     }
 }
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone)]
+enum EventType {
+    #[default]
+    Start,
+    End,
+    Intersection
+}
+
+#[derive(Default, Debug, Copy, Clone)]
 struct SweepLinePoint {
     pub line: geometry::Line,
     pub point: geometry::Point,
-    pub start: bool,
+    pub event: EventType
+}
+
+impl PartialEq for SweepLinePoint {
+    fn eq(&self, other: &Self) -> bool {
+        let eps: f32 = 10e-3;
+        f32::abs(self.point.x - other.point.x) < eps && f32::abs(self.point.y - other.point.y) < eps
+    }
+}
+
+impl Eq for SweepLinePoint {}
+
+impl PartialOrd for SweepLinePoint {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        other.point.y.partial_cmp(&self.point.y)
+    }
+}
+
+impl Ord for SweepLinePoint {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.point.y.total_cmp(&self.point.y)
+    }
 }
 
 impl Intersector for SweepLineIntersector {
@@ -151,24 +183,38 @@ impl Intersector for SweepLineIntersector {
 
         let mut points = lines.iter().flat_map(|line| [
             // The largest y coordinate is considered the start of a line.
-            SweepLinePoint { line: *line, point: line.a, start: line.a.y > line.b.y },
-            SweepLinePoint { line: *line, point: line.b, start: line.b.y > line.a.y }])
+            SweepLinePoint { line: *line, point: line.a,
+                event: match line.a.y > line.b.y {
+                    true => EventType::Start,
+                    _ => EventType::End
+                }
+            },
+            SweepLinePoint {
+                line: *line,
+                point: line.b,
+                event: match line.b.y > line.a.y {
+                    true => EventType::Start,
+                    _ => EventType::End
+                }
+            }])
         .collect::<Vec<_>>();
         points.sort_by(|p, q| p.point.y.partial_cmp(&q.point.y).unwrap().reverse());
         let mut active_set = Vec::new();
 
         for current_sweep_point in 0..points.len() {
             let point = points[current_sweep_point];
-            if point.start {
-                for other in &active_set {
-                    num_tests += 1;
-                    if let Some(intersect) = line_intersect(point.line, *other) {
-                        intersections.push(intersect);
+            match point.event {
+                EventType::Start => {
+                    for other in &active_set {
+                        num_tests += 1;
+                        if let Some(intersect) = line_intersect(point.line, *other) {
+                            intersections.push(intersect);
+                        }
                     }
-                }
-                active_set.push(point.line);
-            } else {
-                active_set.retain(|x| *x != point.line);
+                    active_set.push(point.line);
+                },
+                EventType::End => active_set.retain(|x| *x != point.line),
+                _ => {}
             }
         }
 
@@ -176,12 +222,122 @@ impl Intersector for SweepLineIntersector {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum PointKind {
+    Start,
+    End
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SweepLineStatus {
+    pub line: geometry::Line,
+    pub point: geometry::Point,
+    pub kind: PointKind
+}
+
+impl PartialEq for SweepLineStatus {
+    fn eq(&self, other: &Self) -> bool {
+        let eps = 10e-3f32;
+        f32::abs(self.point.x - other.point.x) < eps && f32::abs(self.point.y - other.point.y) < eps
+    }
+}
+
+impl Eq for SweepLineStatus {}
+
+impl PartialOrd for SweepLineStatus {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.point.x.partial_cmp(&other.point.x)
+    }
+}
+
+impl Ord for SweepLineStatus {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.point.x.total_cmp(&other.point.x)
+    }
+}
+
+fn get_neighbors(point: geometry::Point, status: &BTreeSet::<SweepLineStatus>) -> (Option<SweepLineStatus>, Option<SweepLineStatus>) {
+    let s_left = SweepLineStatus {
+        line: Default::default(),
+        point: geometry::Point{ x: point.x - 0.01, y: point.y },
+        kind: PointKind::Start
+    };
+    let s_right = SweepLineStatus {
+        line: Default::default(),
+        point: geometry::Point{ x: point.x + 0.01, y: point.y },
+        kind: PointKind::Start
+    };
+    (status.range(..s_left).next_back().copied(), status.range(s_right..).next().copied())
+}
+
+fn test_neighbour(l1: geometry::Line, l2: geometry::Line, queue: &mut BTreeSet::<SweepLinePoint>) -> Option<Intersection> {
+    let i = line_intersect(l1, l2);
+    if let Some(intersection) = i {
+        queue.insert(SweepLinePoint{
+            line: Default::default(),
+            point: intersection.point,
+            // Todo: add relevant lines to Intersection emote
+            event: EventType::Intersection
+        });
+        println!("Intersection at {:?}", intersection.point);
+        return i;
+    }
+
+    None
+}
+
 impl Intersector for SmartSweepLineIntersector {
     fn report_intersections(lines: &[Line]) -> Report {
         let mut intersections = Vec::new();
         let mut num_tests = 0;
 
+        let mut event_queue = BTreeSet::<SweepLinePoint>::new();
+        let mut status = BTreeSet::<SweepLineStatus>::new();
 
+        // Initialize event queue by pushing all points into it.
+        for line in lines.into_iter() {
+            event_queue.insert(SweepLinePoint {
+                line: *line, point: line.a,
+                event: match line.a.y > line.b.y {
+                    true => EventType::Start,
+                    _ => EventType::End
+                }
+            });
+            event_queue.insert(SweepLinePoint {
+               line: *line, point: line.b,
+                event: match line.b.y > line.a.y {
+                    true => EventType::Start,
+                    _ => EventType::End
+                }
+            });
+        }
+
+        while let Some(event) = event_queue.pop_first() {
+            match event.event {
+                EventType::Start => {
+                    status.insert( SweepLineStatus {
+                        line: event.line,
+                        point: event.point,
+                        kind: PointKind::Start
+                    });
+                    let (left, right) = get_neighbors(event.point, &status);
+                    if let Some(left) = left {
+                        num_tests += 1;
+                        if let Some(intersection) = test_neighbour(event.line, left.line, &mut event_queue) {
+                            intersections.push(intersection);
+                        }
+                    }
+                    if let Some(right) = right {
+                        num_tests += 1;
+                        if let Some(intersection) = test_neighbour(event.line, right.line, &mut event_queue) {
+                            intersections.push(intersection);
+                        }
+                    }
+                },
+                EventType::End => {},
+                EventType::Intersection => {},
+            };
+        }
 
         Report { intersections, num_tests }
     }

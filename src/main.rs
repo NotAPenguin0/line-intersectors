@@ -10,7 +10,7 @@ fn main() {
     let n = 50;
     let lines = generators::generate_lines::<generators::RandomUnitSquare>(n, &mut rng);
     let now = time::Instant::now();
-    let report = intersect::report_all_intersections::<intersect::SweepLineIntersector>(&lines);
+    let report = intersect::report_all_intersections::<intersect::SmartSweepLineIntersector>(&lines);
     let elapsed = now.elapsed();
     println!("#Intersections found: {} (took {:.2?})", report.intersections.len(), elapsed);
 

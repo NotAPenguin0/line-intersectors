@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::geometry;
 use rand::Rng;
 
